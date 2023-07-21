@@ -12,6 +12,29 @@ use std::{
     thread::sleep,
     time::Duration,
 };
+struct Wall(u16, u16);
+impl Wall {
+    fn darw(&self) -> Result<()> {
+        for i in 0..self.0 {
+            stdout().queue(MoveTo(i, 0))?.queue(style::Print("█"))?;
+            stdout()
+                .queue(MoveTo(i, self.1))?
+                .queue(style::Print("█"))?;
+            stdout().queue(MoveTo(0, i))?.queue(style::Print("█"))?;
+            stdout()
+                .queue(MoveTo(self.0, i))?
+                .queue(style::Print("█"))?;
+        }
+        Ok(())
+    }
+    fn is_collision(&self, head: (u16, u16)) -> bool {
+        if head.0 > 0 && head.0 < self.0 && head.1 > 0 && head.1 < self.1 {
+            false
+        } else {
+            true
+        }
+    }
+}
 #[derive(Debug)]
 struct Snake {
     body: VecDeque<(u16, u16)>,
@@ -62,7 +85,11 @@ impl Snake {
     }
     fn eat(&mut self, value: u8) {
         self.score += value as u32;
-        self.body.push_back(*self.body.back().unwrap());
+    }
+    fn update(&mut self, x: u16, y: u16) {
+        for _ in 0..((self.score as i32) / 100 - self.body.len() as i32) {
+            self.body.push_back((x, y));
+        }
     }
 }
 struct Egg {
@@ -71,17 +98,17 @@ struct Egg {
 }
 
 impl Egg {
-    fn range() -> Self {
+    fn range(wall: (u16, u16)) -> Self {
         Self {
             direction: (
-                rand::thread_rng().gen_range(0..50),
-                (rand::thread_rng().gen_range(0..15)),
+                rand::thread_rng().gen_range(1..wall.0),
+                (rand::thread_rng().gen_range(1..wall.1)),
             ),
             value: rand::thread_rng().gen_range(0..u8::MAX),
         }
     }
-    fn set_range(&mut self) {
-        *self = Self::range();
+    fn set_range(&mut self, wall: (u16, u16)) {
+        *self = Self::range(wall);
     }
     fn is_be_eaten(&self, head: (u16, u16)) -> bool {
         if self.direction == head {
@@ -93,11 +120,21 @@ impl Egg {
 }
 
 fn main() -> Result<()> {
-    let mut snake = Snake::new(KeyCode::Right, (0, 0));
-    let mut egg = Egg::range();
+    let wall = Wall(110, 25);
+    let mut snake = Snake::new(KeyCode::Right, (10, 10));
+    let mut egg = Egg::range((wall.0, wall.1));
     enable_raw_mode()?;
-    execute!(stdout(), terminal::Clear(terminal::ClearType::All))?;
+    execute!(
+        stdout(),
+        terminal::Clear(terminal::ClearType::All),
+        SetSize(wall.0, wall.1),
+        EnterAlternateScreen
+    )?;
+    wall.darw()?;
     loop {
+        stdout()
+            .queue(MoveTo(2, 2))?
+            .queue(style::Print(format!("Score:{}", snake.score)))?;
         if poll(Duration::from_millis(1))? {
             match event::read()? {
                 Event::Key(KeyEvent {
@@ -105,7 +142,15 @@ fn main() -> Result<()> {
                     modifiers: _,
                     kind: _,
                     state: _,
-                }) => snake.set_direction(code),
+                }) => match code {
+                    KeyCode::Esc => {
+                        execute!(stdout(), LeaveAlternateScreen)?;
+                        disable_raw_mode()?;
+                        println!("Esc");
+                        return Ok(());
+                    }
+                    _ => snake.set_direction(code),
+                },
                 _ => (),
             }
         } else {
@@ -113,7 +158,7 @@ fn main() -> Result<()> {
             let (old_x, old_y) = snake.move_body();
             if egg.is_be_eaten(snake.head) {
                 snake.eat(egg.value);
-                egg.set_range()
+                egg.set_range((wall.0, wall.1))
             }
             stdout()
                 .queue(MoveTo(old_x, old_y))?
@@ -121,15 +166,22 @@ fn main() -> Result<()> {
             stdout()
                 .queue(MoveTo(egg.direction.0, egg.direction.1))?
                 .queue(style::Print("$"))?;
+            stdout()
+                .queue(MoveTo(snake.head.0, snake.head.1))?
+                .queue(style::Print("◎"))?;
             for &(x, y) in &snake.body {
-                stdout().queue(MoveTo(x, y))?.queue(style::Print("*"))?;
+                stdout().queue(MoveTo(x, y))?.queue(style::Print("●"))?;
                 stdout().flush().unwrap();
             }
-            sleep(Duration::from_millis(200));
-        }
-        execute!(stdout(), EndSynchronizedUpdate)?;
-        if snake.is_collision() {
-            panic!()
+            snake.update(old_x, old_y);
+            execute!(stdout(), EndSynchronizedUpdate)?;
+            if snake.is_collision() || wall.is_collision(snake.head) {
+                execute!(stdout(), LeaveAlternateScreen)?;
+                disable_raw_mode()?;
+                println!("Game Over!!!");
+                return Ok(());
+            }
+            sleep(Duration::from_millis(100));
         }
     }
 }
